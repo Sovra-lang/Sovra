@@ -1,0 +1,40 @@
+fn half(value: Float) -> Float {
+    return value / 2
+}
+
+mod numeric {
+    export fn five() -> Float {
+        return 5
+    }
+}
+
+fn main() {
+    let scaled: Float = 2
+    print(scaled + 3.5)
+    print(half(5))
+    print(numeric::five() / 2)
+    print(5 / 2)
+    print(5.0 / 2.0)
+    print(2 + 0.5)
+    print(0.5 + 2)
+    print(3 - 0.5)
+    print(3.5 - 1)
+    print(2 * 1.5)
+    print(1.5 * 2)
+    print(2 == 2.0)
+    print(2.0 != 2)
+    print(1 < 2.0)
+    print(2.0 <= 2)
+    print(3 > 2.0)
+    print(2.0 >= 2)
+    print(9007199254740993)
+    print(9007199254740993 == 9007199254740992)
+    print(0005 / 2)
+    let ratio: Float = 5
+    print(ratio / 2)
+    print(half(5.0))
+    print((0 - 5) / 2)
+    print(5 / (0 - 2))
+    print(std::len("hi") + 1)
+    print(std::len("é") + 1)
+}

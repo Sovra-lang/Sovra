@@ -73,7 +73,7 @@ fn execute_function(
     let mut output = Vec::new();
     for instruction in &function.instructions {
         match instruction {
-            Instruction::LoadLiteral(value) => stack.push(value_from_literal(value)),
+            Instruction::LoadLiteral(value) => stack.push(value_from_literal(value)?),
             Instruction::LoadName(name) => stack.push(
                 names
                     .get(name)
@@ -85,6 +85,16 @@ fn execute_function(
                     .pop()
                     .ok_or_else(|| "stack underflow on store".to_owned())?;
                 names.insert(name.clone(), value);
+            }
+            Instruction::WidenFloat => {
+                let value = stack
+                    .pop()
+                    .ok_or_else(|| "stack underflow on widening".to_owned())?;
+                stack.push(match value {
+                    Value::Int(value) => Value::Float(value as f64),
+                    Value::Float(_) => value,
+                    _ => return Err("Float conversion expects Int or Float".to_owned()),
+                });
             }
             Instruction::Binary(operator) => {
                 let right = stack
@@ -176,24 +186,27 @@ fn execute_std_call(
     Ok(())
 }
 
-fn value_from_literal(value: &Literal) -> Value {
+fn value_from_literal(value: &Literal) -> Result<Value, String> {
     match value {
-        Literal::Integer(value) => Value::Int(
-            value
-                .parse()
-                .expect("integer literals are validated before IR lowering"),
-        ),
-        Literal::Float(value) => Value::Float(
-            value
-                .parse()
-                .expect("float literals are validated before IR lowering"),
-        ),
-        Literal::Boolean(value) => Value::Bool(*value),
-        Literal::String(value) => Value::String(value.clone()),
+        Literal::Integer(value) => value
+            .parse()
+            .map(Value::Int)
+            .map_err(|_| "invalid or out-of-range integer literal".to_owned()),
+        Literal::Float(value) => value
+            .parse()
+            .map(Value::Float)
+            .map_err(|_| "invalid float literal".to_owned()),
+        Literal::Boolean(value) => Ok(Value::Bool(*value)),
+        Literal::String(value) => Ok(Value::String(value.clone())),
     }
 }
 
 fn binary(operator: &str, left: Value, right: Value) -> Result<Value, String> {
+    let (left, right) = match (left, right) {
+        (Value::Int(left), Value::Float(right)) => (Value::Float(left as f64), Value::Float(right)),
+        (Value::Float(left), Value::Int(right)) => (Value::Float(left), Value::Float(right as f64)),
+        values => values,
+    };
     if operator == "/" {
         let zero = match &right {
             Value::Int(value) => *value == 0,
@@ -205,10 +218,10 @@ fn binary(operator: &str, left: Value, right: Value) -> Result<Value, String> {
         }
     }
     match (operator, left, right) {
-        ("+", Value::Int(left), Value::Int(right)) => Ok(Value::Int(left + right)),
-        ("-", Value::Int(left), Value::Int(right)) => Ok(Value::Int(left - right)),
-        ("*", Value::Int(left), Value::Int(right)) => Ok(Value::Int(left * right)),
-        ("/", Value::Int(left), Value::Int(right)) => Ok(Value::Int(left / right)),
+        ("+", Value::Int(left), Value::Int(right)) => checked_integer(left.checked_add(right)),
+        ("-", Value::Int(left), Value::Int(right)) => checked_integer(left.checked_sub(right)),
+        ("*", Value::Int(left), Value::Int(right)) => checked_integer(left.checked_mul(right)),
+        ("/", Value::Int(left), Value::Int(right)) => checked_integer(left.checked_div(right)),
         ("+", Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
         ("-", Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
         ("*", Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
@@ -232,10 +245,49 @@ fn binary(operator: &str, left: Value, right: Value) -> Result<Value, String> {
     }
 }
 
+fn checked_integer(value: Option<i64>) -> Result<Value, String> {
+    value
+        .map(Value::Int)
+        .ok_or_else(|| "integer overflow".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::compiler::{ir, parser::Parser, semantic::SemanticAnalyzer};
+
+    #[test]
+    fn numeric_example_preserves_widening_and_integer_precision() {
+        let parsed = Parser::new()
+            .parse_source(include_str!("../../examples/numbers/main.svr"))
+            .expect("valid numeric syntax");
+        let program = ir::lower_program(&parsed).expect("valid numeric types");
+        let output = run(&program).expect("numeric program must execute");
+        let expected: Vec<_> = include_str!("../../tests/fixtures/numbers.stdout")
+            .lines()
+            .collect();
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn numeric_overflow_is_a_runtime_error() {
+        for expression in [
+            "9223372036854775807 + 1",
+            "(0 - 9223372036854775807 - 1) - 1",
+            "9223372036854775807 * 2",
+            "(0 - 9223372036854775807 - 1) / (0 - 1)",
+        ] {
+            let parsed = Parser::new()
+                .parse_source(&format!("fn main() {{ print({expression}) }}"))
+                .expect("valid numeric syntax");
+            let program = ir::lower_program(&parsed).expect("valid numeric types");
+            assert_eq!(
+                run(&program),
+                Err("integer overflow".into()),
+                "{expression}"
+            );
+        }
+    }
 
     #[test]
     fn executes_print_program() {

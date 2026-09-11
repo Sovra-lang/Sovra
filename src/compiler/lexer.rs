@@ -13,7 +13,7 @@ pub enum TokenKind {
     Integer(String),
     /// A decimal floating-point literal.
     Float(String),
-    /// A string literal with escapes preserved.
+    /// A string literal with escapes decoded.
     String(String),
     /// A single-character punctuation token.
     Punctuation(char),
@@ -90,7 +90,13 @@ impl Lexer {
                 });
                 continue;
             };
-            tokens.push(Token { kind, span });
+            tokens.push(Token {
+                kind,
+                span: Span {
+                    end: scanner.offset,
+                    ..span
+                },
+            });
         }
 
         let eof_span = scanner.current_span();
@@ -301,6 +307,23 @@ impl<'a> Scanner<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_spans_cover_source_bytes() {
+        let source = "// heading\nlet text = \"é\";\nprint(text)";
+        let tokens = Lexer::new().tokenize(source).expect("valid source");
+        let spellings = [
+            "let", "text", "=", "\"é\"", ";", "print", "(", "text", ")", "",
+        ];
+        assert_eq!(tokens.len(), spellings.len());
+        for (token, spelling) in tokens.iter().zip(spellings) {
+            assert_eq!(&source[token.span.start..token.span.end], spelling);
+        }
+        assert_eq!((tokens[0].span.line, tokens[0].span.column), (1, 0));
+        assert_eq!((tokens[4].span.line, tokens[4].span.column), (1, 14));
+        assert_eq!((tokens[5].span.line, tokens[5].span.column), (2, 0));
+        assert_eq!(tokens.last().expect("EOF").span.start, source.len());
+    }
 
     #[test]
     fn tokenizes_program_foundation() {

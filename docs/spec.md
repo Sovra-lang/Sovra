@@ -38,11 +38,14 @@ The lexer lives in [`src/compiler/lexer.rs`](../src/compiler/lexer.rs).
 
 ## M2 grammar contract
 
-M2 parses function declarations, typed or untyped parameters, optional return
-types, blocks, `let` bindings, `return` statements, literals, identifiers,
-function calls, module-qualified names, and binary expressions with
+M2 parses function declarations, parameter names with optional annotations,
+optional return types, blocks, `let` bindings, `return` statements, literals,
+identifiers, function calls, module-qualified names, and binary expressions with
 conventional precedence. Statement semicolons are optional before a closing
 block.
+
+A missing parameter annotation is retained in the AST for a semantic diagnostic;
+every valid function parameter requires an explicit type under ADR 0002.
 
 ## M3-M8 semantic, type, module, and IR contract
 
@@ -53,7 +56,63 @@ IR containing loads, stores, operators, calls, returns, and value pops.
 Diagnostics use stable `E30xx` codes. Function names and parameters must be
 unique, and the `main` entry function takes no arguments and returns `Unit`.
 
+Every function parameter must declare its type, for example `value: String`.
+This includes unused parameters and every top-level, exported module and
+non-exported module function. A missing annotation produces `E3014` at the
+parameter name:
+
+```text
+parameter `value` requires an explicit type annotation; write `value: Type`
+```
+
+Replace the suggested `Type` with the intended type.
+Local `let` bindings continue to infer their type from the initializer unless
+annotated. An omitted function return type means `Unit`, not return inference.
+Requiring parameter annotations rejects previously accepted untyped declarations;
+see [ADR 0002](adr/0002-function-typing.md), the [function lesson](course/functions.md)
+and [executable example](../examples/functions/main.svr).
+
+Primitive types are `Unit`, `Bool`, `Int`, `Float` and `String`. Other annotation
+names are not yet resolved against type declarations; explicit parameters do not
+complete named-type validation or introduce a general typed HIR.
+
+Parameter and body checks apply to every function, including exported and
+non-exported module functions that are never called. Each function has its own
+local scope. Only top-level `main` has entry-signature restrictions; a module
+function named `main` is an ordinary function.
+In the current straight-line grammar, a function declared to return a non-Unit
+type must contain an explicit `return`; falling through produces `E3013`.
+An expression statement is not an implicit return. Unit functions may fall
+through. Branch-sensitive return analysis will accompany future control flow.
+
+In the current subset, calls resolve top-level functions by bare name and
+exported module functions by `module::function`, including from inside that
+module. Non-exported module functions are checked but are not callable or
+lowered. Implicit module-local lookup and private helper execution remain
+unsupported. See [the module lesson](course/modules.md) and
+[executable example](../examples/modules/main.svr).
+
 ## M5 runtime contract
+
+### Numeric execution
+
+`Int` uses signed 64-bit values; out-of-range literals produce `E3012` during
+semantic checking. Integer arithmetic overflow is a runtime error in every
+build profile. Integer division truncates toward zero. `Float` uses binary64.
+Float annotations on locals, parameters and returns widen Int values before
+use, and mixed Int/Float operators widen the Int operand before evaluation,
+including equality and ordering. Large Int values may round when widened;
+Int-only arithmetic and comparison remain exact. Division by zero is an error
+for both numeric types. No implicit Float-to-Int narrowing is provided.
+
+The IR carries `widen-float` at annotated boundaries. The JavaScript backend
+uses BigInt for Int and Number for Float and requires a runtime supporting
+BigInt and TextEncoder. `std::len` counts UTF-8 bytes in both engines.
+Complete non-finite Float and Float-to-string parity remains experimental.
+See [ADR 0001](adr/0001-numeric-execution.md), the
+[numeric lesson](course/numbers.md), and [example](../examples/numbers/main.svr).
+
+### Function execution
 
 The interpreter executes `main` and user-defined functions. Function arguments
 are bound to parameters in declaration order, return values are passed back to
@@ -90,6 +149,11 @@ standard-library output capture, arithmetic, comparison, and runtime division
 by zero checks.
 
 ## M12 project-checker contract
+
+Project checking is a line-based manifest and wiring scan. It does not invoke
+the executable parser or semantic analyzer, so a successful project check does
+not verify function parameter types or bodies. Use `svr check <source.svr>` for
+semantic validation of an executable source file.
 
 The initial project checker reads `sovra.toml` from a project directory. It
 requires `project.name` and `project.entry`, accepts `project.version`,

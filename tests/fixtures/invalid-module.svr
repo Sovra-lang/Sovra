@@ -1,0 +1,9 @@
+mod sample {
+    export fn value() -> Int {
+        return missing
+    }
+}
+
+fn main() {
+    print(sample::value())
+}

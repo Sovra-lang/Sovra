@@ -21,6 +21,7 @@ fn instruction_text(instruction: &Instruction) -> String {
         Instruction::LoadLiteral(value) => format!("load {}", literal_text(value)),
         Instruction::LoadName(name) => format!("load-name {name}"),
         Instruction::StoreName(name) => format!("store-name {name}"),
+        Instruction::WidenFloat => "widen-float".to_owned(),
         Instruction::Binary(operator) => format!("binary {operator}"),
         Instruction::Call { name, arguments } => format!("call {name} {arguments}"),
         Instruction::Return => "return".to_owned(),
@@ -35,6 +36,7 @@ pub fn render_javascript(program: &IrProgram) -> String {
     let _ = writeln!(output);
     let _ = writeln!(output, "const svrOutput = [];");
     let _ = writeln!(output, "const svrFunctions = Object.create(null);");
+    output.push_str(include_str!("numeric_runtime.js"));
     let _ = writeln!(output);
     for (index, function) in program.functions.iter().enumerate() {
         render_js_function(&mut output, index, function);
@@ -98,26 +100,18 @@ fn render_js_instruction(output: &mut String, instruction: &Instruction) {
         Instruction::StoreName(name) => {
             let _ = writeln!(output, "  names[{}] = stack.pop();", js_string(name));
         }
+        Instruction::WidenFloat => {
+            let _ = writeln!(output, "  stack.push(svrWidenFloat(stack.pop()));");
+        }
         Instruction::Binary(operator) => {
             let _ = writeln!(output, "  {{");
             let _ = writeln!(output, "    const right = stack.pop();");
             let _ = writeln!(output, "    const left = stack.pop();");
-            if operator == "/" {
-                let _ = writeln!(
-                    output,
-                    "    if (right === 0) throw new Error(\"division by zero\");"
-                );
-                let _ = writeln!(
-                    output,
-                    "    stack.push(Number.isInteger(left) && Number.isInteger(right) ? Math.trunc(left / right) : left / right);"
-                );
-            } else {
-                let _ = writeln!(
-                    output,
-                    "    stack.push(left {} right);",
-                    js_binary_operator(operator)
-                );
-            }
+            let _ = writeln!(
+                output,
+                "    stack.push(svrBinary({}, left, right));",
+                js_string(operator)
+            );
             let _ = writeln!(output, "  }}");
         }
         Instruction::Call { name, arguments } => render_js_call(output, name, *arguments),
@@ -142,7 +136,10 @@ fn render_js_call(output: &mut String, name: &str, arguments: usize) {
             let _ = writeln!(output, "    stack.push(undefined);");
         }
         "std::len" => {
-            let _ = writeln!(output, "    stack.push(String(args[0]).length);");
+            let _ = writeln!(
+                output,
+                "    stack.push(BigInt(new TextEncoder().encode(args[0]).length));"
+            );
         }
         "std::to_string" => {
             let _ = writeln!(
@@ -176,17 +173,10 @@ fn literal_text(value: &Literal) -> String {
 
 fn js_literal(value: &Literal) -> String {
     match value {
-        Literal::Integer(value) | Literal::Float(value) => value.clone(),
+        Literal::Integer(value) => format!("svrCheckedInt(BigInt({}))", js_string(value)),
+        Literal::Float(value) => format!("Number({})", js_string(value)),
         Literal::Boolean(value) => value.to_string(),
         Literal::String(value) => js_string(value),
-    }
-}
-
-fn js_binary_operator(operator: &str) -> &str {
-    match operator {
-        "==" => "===",
-        "!=" => "!==",
-        operator => operator,
     }
 }
 
@@ -213,6 +203,78 @@ fn js_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn execute_javascript(source: &str) -> std::process::Output {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("node")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Node.js is required for backend execution tests");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(source.as_bytes())
+            .expect("write JavaScript");
+        child.wait_with_output().expect("wait for Node.js")
+    }
+
+    #[test]
+    fn numeric_javascript_matches_expected_output() {
+        let parsed = crate::compiler::parser::Parser::new()
+            .parse_source(include_str!("../../examples/numbers/main.svr"))
+            .expect("valid syntax");
+        let ir = crate::compiler::ir::lower_program(&parsed).expect("valid types");
+        let output = execute_javascript(&render_javascript(&ir));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual = String::from_utf8(output.stdout).expect("UTF-8 output");
+        assert_eq!(
+            actual.lines().collect::<Vec<_>>(),
+            include_str!("../../tests/fixtures/numbers.stdout")
+                .lines()
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn numeric_javascript_errors_match_interpreter() {
+        let mut javascript = String::new();
+        let mut expected = Vec::new();
+        for expression in [
+            "9223372036854775807 + 1",
+            "(0 - 9223372036854775807 - 1) - 1",
+            "9223372036854775807 * 2",
+            "(0 - 9223372036854775807 - 1) / (0 - 1)",
+            "1 / 0",
+            "1.0 / 0",
+            "1 / 0.0",
+        ] {
+            let parsed = crate::compiler::parser::Parser::new()
+                .parse_source(&format!("fn main() {{ print({expression}) }}"))
+                .expect("valid syntax");
+            let ir = crate::compiler::ir::lower_program(&parsed).expect("valid types");
+            expected.push(crate::compiler::interpreter::run(&ir).expect_err("runtime failure"));
+            javascript.push_str("try { (function() {\n");
+            javascript.push_str(&render_javascript(&ir));
+            javascript.push_str("})(); console.log('unexpected success'); } catch (error) { console.log(error.message); }\n");
+        }
+        let output = execute_javascript(&javascript);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual = String::from_utf8(output.stdout).expect("UTF-8 output");
+        assert_eq!(actual.lines().collect::<Vec<_>>(), expected);
+    }
 
     #[test]
     fn renders_function_header() {

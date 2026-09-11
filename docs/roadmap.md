@@ -71,6 +71,15 @@ entry, app route and page path/target bindings, auth target wiring, app data
 model references, scheduled task targets, and auth policy model references.
 Full service contracts and richer page/model checks remain next.
 
+Before expanding this surface, the handoff assessment recommends hardening the
+existing executable subset. Module bodies, numeric widening/bounds, Int
+overflow, token ranges and straight-line return completeness are now covered.
+ADR 0002 is approved and implemented: every function parameter requires an
+explicit annotation, while local inference and default Unit returns remain.
+Named-type resolution, full runtime/backend equivalence and rich diagnostics
+remain incomplete. Project checking still does not validate function bodies
+or parameter annotations through the executable compiler.
+
 ## M13 — Sovra Tests
 
 Make `svr test <project>` run Sovra-native unit, integration, service-contract,

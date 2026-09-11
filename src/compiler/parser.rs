@@ -101,6 +101,8 @@ impl<'a> TokenParser<'a> {
             let type_name = if self.consume_punctuation(':') {
                 self.expect_identifier("parameter type")
             } else {
+                // Preserve the missing annotation for a semantic diagnostic
+                // at the parameter's name rather than discarding the function.
                 None
             };
             parameters.push(Parameter {
@@ -410,6 +412,19 @@ mod tests {
         assert_eq!(program.functions.len(), 1);
         assert_eq!(program.functions[0].name, "main");
         assert_eq!(program.functions[0].body.len(), 2);
+    }
+
+    #[test]
+    fn preserves_missing_parameter_annotation_for_diagnostics() {
+        let source = "fn helper(value, typed: Int) {}";
+        let program = Parser::new()
+            .parse_source(source)
+            .expect("recoverable declaration");
+        let parameters = &program.functions[0].parameters;
+        assert_eq!(parameters[0].type_name, None);
+        assert_eq!(parameters[1].type_name.as_deref(), Some("Int"));
+        let span = parameters[0].span;
+        assert_eq!(&source[span.start..span.end], "value");
     }
 
     #[test]

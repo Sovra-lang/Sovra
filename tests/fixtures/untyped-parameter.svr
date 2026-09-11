@@ -1,0 +1,7 @@
+fn length(value) -> Int {
+    return std::len(value)
+}
+
+fn main() {
+    print(length(42))
+}

@@ -1,0 +1,13 @@
+mod math {
+    export fn add(left: Int, right: Int) -> Int {
+        return left + right
+    }
+
+    export fn double(value: Int) -> Int {
+        return math::add(value, value)
+    }
+}
+
+fn main() {
+    std::println(math::double(21))
+}

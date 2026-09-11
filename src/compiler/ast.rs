@@ -44,7 +44,8 @@ pub struct Function {
 pub struct Parameter {
     /// Parameter name.
     pub name: String,
-    /// Optional parameter type.
+    /// Parameter annotation, required by semantic analysis. None preserves
+    /// incomplete declarations so the analyzer can diagnose the missing type.
     pub type_name: Option<String>,
     /// Location of the parameter.
     pub span: Span,

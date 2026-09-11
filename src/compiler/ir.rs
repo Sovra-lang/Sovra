@@ -43,6 +43,8 @@ pub enum Instruction {
     LoadName(String),
     /// Store a named value.
     StoreName(String),
+    /// Convert an Int value to Float, preserving values already of type Float.
+    WidenFloat,
     /// Apply an operator.
     Binary(String),
     /// Call a function with an argument count.
@@ -85,8 +87,19 @@ fn lower_namespaced_function(
 
 fn lower_function(function: &crate::compiler::ast::Function) -> IrFunction {
     let mut instructions = Vec::new();
+    for parameter in &function.parameters {
+        if parameter.type_name.as_deref() == Some("Float") {
+            instructions.push(Instruction::LoadName(parameter.name.clone()));
+            instructions.push(Instruction::WidenFloat);
+            instructions.push(Instruction::StoreName(parameter.name.clone()));
+        }
+    }
     for statement in &function.body {
-        lower_statement(statement, &mut instructions);
+        lower_statement(
+            statement,
+            function.return_type.as_deref(),
+            &mut instructions,
+        );
     }
     IrFunction {
         name: function.name.clone(),
@@ -99,15 +112,30 @@ fn lower_function(function: &crate::compiler::ast::Function) -> IrFunction {
     }
 }
 
-fn lower_statement(statement: &Statement, instructions: &mut Vec<Instruction>) {
+fn lower_statement(
+    statement: &Statement,
+    return_type: Option<&str>,
+    instructions: &mut Vec<Instruction>,
+) {
     match statement {
-        Statement::Let { name, value, .. } => {
+        Statement::Let {
+            name,
+            type_name,
+            value,
+            ..
+        } => {
             lower_expression(value, instructions);
+            if type_name.as_deref() == Some("Float") {
+                instructions.push(Instruction::WidenFloat);
+            }
             instructions.push(Instruction::StoreName(name.clone()));
         }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
                 lower_expression(value, instructions);
+                if return_type == Some("Float") {
+                    instructions.push(Instruction::WidenFloat);
+                }
             }
             instructions.push(Instruction::Return);
         }

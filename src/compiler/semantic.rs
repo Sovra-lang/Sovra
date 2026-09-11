@@ -118,35 +118,11 @@ impl SemanticAnalyzer {
                     function.span,
                 ));
             }
-            let mut scope: HashMap<String, Type> = HashMap::new();
-            for parameter in &function.parameters {
-                if scope.contains_key(&parameter.name) {
-                    diagnostics.push(diagnostic(
-                        "E3011",
-                        format!("duplicate parameter `{}`", parameter.name),
-                        parameter.span,
-                    ));
-                }
-                let parameter_type = parameter
-                    .type_name
-                    .as_deref()
-                    .map(type_from_name)
-                    .unwrap_or(Type::Unknown);
-                scope.insert(parameter.name.clone(), parameter_type);
-            }
-            let expected_return = function
-                .return_type
-                .as_deref()
-                .map(type_from_name)
-                .unwrap_or(Type::Unit);
-            for statement in &function.body {
-                check_statement(
-                    statement,
-                    &mut scope,
-                    &functions,
-                    &expected_return,
-                    &mut diagnostics,
-                );
+            check_function_body(function, &functions, &mut diagnostics);
+        }
+        for module in &program.modules {
+            for function in &module.functions {
+                check_function_body(function, &functions, &mut diagnostics);
             }
         }
         if diagnostics.is_empty() {
@@ -156,6 +132,70 @@ impl SemanticAnalyzer {
         } else {
             Err(diagnostics)
         }
+    }
+}
+
+fn check_function_body(
+    function: &Function,
+    functions: &HashMap<String, &Function>,
+    diagnostics: &mut Diagnostics,
+) {
+    let mut scope: HashMap<String, Type> = HashMap::new();
+    for parameter in &function.parameters {
+        if scope.contains_key(&parameter.name) {
+            diagnostics.push(diagnostic(
+                "E3011",
+                format!("duplicate parameter `{}`", parameter.name),
+                parameter.span,
+            ));
+        }
+        let parameter_type = match parameter.type_name.as_deref() {
+            Some(type_name) => type_from_name(type_name),
+            None => {
+                diagnostics.push(diagnostic(
+                    "E3014",
+                    format!(
+                        "parameter `{name}` requires an explicit type annotation; write `{name}: Type`",
+                        name = parameter.name
+                    ),
+                    parameter.span,
+                ));
+                // Unknown is error recovery, not parameter type inference.
+                Type::Unknown
+            }
+        };
+        scope.insert(parameter.name.clone(), parameter_type);
+    }
+    let expected_return = function
+        .return_type
+        .as_deref()
+        .map(type_from_name)
+        .unwrap_or(Type::Unit);
+    // The current AST has only straight-line statements. Branches and loops
+    // will require control-flow-aware return analysis when they are introduced.
+    if expected_return != Type::Unit
+        && !function
+            .body
+            .iter()
+            .any(|statement| matches!(statement, Statement::Return { .. }))
+    {
+        diagnostics.push(diagnostic(
+            "E3013",
+            format!(
+                "function `{}` must return {expected_return:?}",
+                function.name
+            ),
+            function.span,
+        ));
+    }
+    for statement in &function.body {
+        check_statement(
+            statement,
+            &mut scope,
+            functions,
+            &expected_return,
+            diagnostics,
+        );
     }
 }
 
@@ -230,7 +270,16 @@ fn check_expression(
 ) -> Type {
     match expression {
         Expression::String(_) => Type::String,
-        Expression::Integer(_) => Type::Int,
+        Expression::Integer(value) => {
+            if value.parse::<i64>().is_err() {
+                diagnostics.push(diagnostic(
+                    "E3012",
+                    "integer literal is outside the signed 64-bit range",
+                    span,
+                ));
+            }
+            Type::Int
+        }
         Expression::Float(_) => Type::Float,
         Expression::Boolean(_) => Type::Bool,
         Expression::Identifier(name) => scope.get(name).cloned().unwrap_or_else(|| {
@@ -508,6 +557,122 @@ mod tests {
     use crate::compiler::parser::Parser;
 
     #[test]
+    fn requires_parameter_annotations_in_all_functions() {
+        for source in [
+            "fn helper(value) {} fn main() {}",
+            "export fn helper(value) {} fn main() {}",
+            "mod sample { fn helper(value) {} } fn main() {}",
+            "mod sample { export fn helper(value) {} } fn main() {}",
+            include_str!("../../tests/fixtures/untyped-parameter.svr"),
+        ] {
+            let parsed = Parser::new()
+                .parse_source(source)
+                .expect("recoverable syntax");
+            let diagnostics = SemanticAnalyzer::new()
+                .analyze(&parsed)
+                .expect_err("every function parameter requires a type");
+            let missing_types: Vec<_> = diagnostics
+                .items
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "E3014")
+                .collect();
+            assert_eq!(missing_types.len(), 1, "{source}: {diagnostics:?}");
+            assert_eq!(
+                missing_types[0].message,
+                "parameter `value` requires an explicit type annotation; write `value: Type`"
+            );
+            let span = missing_types[0].span;
+            assert_eq!(&source[span.start..span.end], "value");
+        }
+    }
+
+    #[test]
+    fn reports_each_missing_parameter_annotation() {
+        let source = "fn helper(first, typed: Int,\n    last) {} fn main() {}";
+        let parsed = Parser::new()
+            .parse_source(source)
+            .expect("recoverable syntax");
+        let diagnostics = SemanticAnalyzer::new()
+            .analyze(&parsed)
+            .expect_err("missing types");
+        let missing: Vec<_> = diagnostics
+            .items
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "E3014")
+            .map(|diagnostic| {
+                let span = diagnostic.span;
+                (&source[span.start..span.end], span.line, span.column)
+            })
+            .collect();
+        assert_eq!(missing, vec![("first", 0, 10), ("last", 1, 4)]);
+    }
+
+    #[test]
+    fn typed_parameters_preserve_local_inference() {
+        let parsed = Parser::new()
+            .parse_source(include_str!("../../examples/functions/main.svr"))
+            .expect("valid function example");
+        let typed = SemanticAnalyzer::new()
+            .analyze(&parsed)
+            .expect("inferred locals");
+        let output = crate::compiler::interpreter::run(&crate::compiler::ir::lower(&typed))
+            .expect("function example executes");
+        assert_eq!(output, vec!["5"]);
+
+        let invalid = Parser::new()
+            .parse_source(
+                "fn length(value: String) -> Int { return std::len(value) }
+                fn main() { let number = 42; length(number) }",
+            )
+            .expect("valid syntax");
+        let diagnostics = SemanticAnalyzer::new()
+            .analyze(&invalid)
+            .expect_err("wrong argument type");
+        assert!(diagnostics
+            .items
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E3007"));
+        assert!(!diagnostics
+            .items
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E3014"));
+    }
+
+    #[test]
+    fn rejects_missing_required_return() {
+        for source in [
+            "fn value() -> Int {} fn main() {}",
+            "fn value() -> String { let result = \"hi\" } fn main() {}",
+            "mod values { export fn value() -> Float {} } fn main() {}",
+            "mod values { fn value() -> Int { print(42) } } fn main() {}",
+        ] {
+            let parsed = Parser::new().parse_source(source).expect("valid syntax");
+            let errors = SemanticAnalyzer::new()
+                .analyze(&parsed)
+                .expect_err("value-returning function cannot fall through");
+            assert!(errors.items.iter().any(|error| error.code == "E3013"));
+        }
+        let parsed = Parser::new()
+            .parse_source("fn noop() -> Unit {} fn value() -> Int { return 42 } fn main() {}")
+            .expect("valid syntax");
+        assert!(SemanticAnalyzer::new().analyze(&parsed).is_ok());
+    }
+
+    #[test]
+    fn numeric_integer_literals_must_fit_i64() {
+        for source in [
+            "fn main() { print(9223372036854775808) }",
+            "mod values { export fn bad() -> Int { return 99999999999999999999 } } fn main() {}",
+        ] {
+            let parsed = Parser::new().parse_source(source).expect("valid syntax");
+            let errors = SemanticAnalyzer::new()
+                .analyze(&parsed)
+                .expect_err("out-of-range literals must be diagnosed");
+            assert!(errors.items.iter().any(|error| error.code == "E3012"));
+        }
+    }
+
+    #[test]
     fn resolves_bindings_and_builtin_print() {
         let program = Parser::new()
             .parse_source("fn main() { let message = \"hi\"; print(message) }")
@@ -566,6 +731,76 @@ mod tests {
             )
             .expect("source should parse");
         assert!(SemanticAnalyzer::new().analyze(&program).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_module_function_bodies() {
+        let cases = [
+            ("fn bad() { print(missing) }", "E3001"),
+            ("fn bad() -> Int { return \"wrong\" }", "E3002"),
+            ("fn bad(value: Int, value: Int) {}", "E3011"),
+            ("fn bad() { let value: Int = \"wrong\" }", "E3002"),
+            ("fn bad() { missing() }", "E3004"),
+            ("fn bad() { std::len() }", "E3006"),
+            ("fn bad() { std::len(42) }", "E3007"),
+            ("fn bad() { print(true + 1) }", "E3005"),
+        ];
+        for visibility in ["", "export "] {
+            for (function, code) in cases {
+                let source = format!("mod sample {{ {visibility}{function} }} fn main() {{}}");
+                let program = Parser::new().parse_source(&source).expect("valid syntax");
+                let diagnostics = SemanticAnalyzer::new()
+                    .analyze(&program)
+                    .expect_err(&source);
+                assert!(
+                    diagnostics.items.iter().any(|item| item.code == code),
+                    "expected {code} for {source}: {diagnostics:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn module_functions_have_independent_local_scopes() {
+        let program = Parser::new()
+            .parse_source(
+                "mod sample { export fn first(value: Int) -> Int { return value }
+                 export fn second() -> Int { return value } } fn main() {}",
+            )
+            .expect("valid syntax");
+        let diagnostics = SemanticAnalyzer::new()
+            .analyze(&program)
+            .expect_err("parameters must not leak into another function");
+        assert!(diagnostics.items.iter().any(|item| item.code == "E3001"));
+    }
+
+    #[test]
+    fn module_main_is_an_ordinary_function() {
+        let program = Parser::new()
+            .parse_source(
+                "mod sample { export fn main(value: Int) -> Int { return value } }
+                 fn main() { print(sample::main(42)) }",
+            )
+            .expect("valid syntax");
+        let typed = SemanticAnalyzer::new()
+            .analyze(&program)
+            .expect("entry restrictions apply only to top-level main");
+        let output = crate::compiler::interpreter::run(&crate::compiler::ir::lower(&typed))
+            .expect("exported function should execute");
+        assert_eq!(output, vec!["42"]);
+    }
+
+    #[test]
+    fn module_example_checks_and_executes() {
+        let program = Parser::new()
+            .parse_source(include_str!("../../examples/modules/main.svr"))
+            .expect("module example should parse");
+        let typed = SemanticAnalyzer::new()
+            .analyze(&program)
+            .expect("module example should check");
+        let output = crate::compiler::interpreter::run(&crate::compiler::ir::lower(&typed))
+            .expect("module example should execute");
+        assert_eq!(output, vec!["42"]);
     }
 
     #[test]

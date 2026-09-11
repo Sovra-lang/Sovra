@@ -60,6 +60,11 @@ and production-oriented.
 
 ## Quick start
 
+Development requires Rust; backend execution tests also require Node.js
+(CI uses Node 22). The implementation remains pre-stable. See
+[full development status](docs/FULL_DEVELOPMENT_STATUS.md) for verified features,
+known limits and the current sequence of work.
+
 ```text
 cargo run -- --version
 cargo run -- --help
@@ -74,6 +79,9 @@ selected.
 
 The first source example is [`examples/hello-world/main.svr`](examples/hello-world/main.svr).
 Run it with `cargo run -- run examples/hello-world/main.svr`.
+Additional executable examples cover [inline modules](examples/modules/main.svr)
+and [numeric widening](examples/numbers/main.svr). Their lessons are in
+[the growing course](docs/course/README.md).
 
 Read [docs/developer-experience.md](docs/developer-experience.md) for the full
 idea-to-application walkthrough.

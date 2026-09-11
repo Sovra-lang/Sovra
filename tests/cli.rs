@@ -131,6 +131,52 @@ fn check_command_validates_source_file() {
 }
 
 #[test]
+fn source_commands_reject_invalid_module_bodies() {
+    let source = format!(
+        "{}/tests/fixtures/invalid-module.svr",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    for arguments in [
+        vec!["check", source.as_str()],
+        vec!["run", source.as_str()],
+        vec!["build", source.as_str()],
+        vec!["build", "--emit", "js", source.as_str()],
+    ] {
+        let Some(output) = output_or_skip(svr().args(&arguments)) else {
+            return;
+        };
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("E3001"), "{arguments:?}: {stderr}");
+        assert!(stderr.contains("undefined variable `missing`"));
+    }
+}
+
+#[test]
+fn source_commands_require_parameter_annotations() {
+    let source = format!(
+        "{}/tests/fixtures/untyped-parameter.svr",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    for arguments in [
+        vec!["check", source.as_str()],
+        vec!["run", source.as_str()],
+        vec!["build", source.as_str()],
+        vec!["build", "--emit", "js", source.as_str()],
+    ] {
+        let Some(output) = output_or_skip(svr().args(&arguments)) else {
+            return;
+        };
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("E3014"), "{arguments:?}: {stderr}");
+        assert!(stderr.contains("write `value: Type`"));
+    }
+}
+
+#[test]
 fn check_command_validates_project_directory() {
     let project = format!("{}/examples/fielddesk", env!("CARGO_MANIFEST_DIR"));
     let Some(output) = output_or_skip(svr().args(["check", project.as_str()])) else {

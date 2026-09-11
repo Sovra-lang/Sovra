@@ -1,0 +1,10 @@
+fn length(value: String) -> Int {
+    let count = std::len(value)
+    return count
+}
+
+fn main() {
+    let text = "Sovra"
+    let count = length(text)
+    print(count)
+}
