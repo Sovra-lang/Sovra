@@ -73,14 +73,20 @@ cargo test
 
 The canonical executable is `svr`. `svr run` executes a `.svr` source path.
 `svr build` emits human-readable IR by default, and
-`svr build --emit js` emits portable JavaScript. Remaining commands are listed
-by `svr --help` and report a clear, non-zero “not implemented” message when
-selected.
+`svr build --emit js` emits portable JavaScript. `svr --help` lists available
+and planned commands; planned commands report a non-zero “not implemented”
+message when selected.
+
+`svr check` validates source files or project wiring. For automation,
+`svr check --format json <path>` emits a versioned report; see
+[automated checks](docs/guides/automated-checks.md) for scope and exit codes.
 
 The first source example is [`examples/hello-world/main.svr`](examples/hello-world/main.svr).
 Run it with `cargo run -- run examples/hello-world/main.svr`.
-Additional executable examples cover [inline modules](examples/modules/main.svr)
-and [numeric widening](examples/numbers/main.svr). Their lessons are in
+Additional executable examples cover [functions and local inference](examples/functions/main.svr),
+[inline modules](examples/modules/main.svr) and [numeric widening](examples/numbers/main.svr).
+Every function parameter requires an explicit type; local `let` bindings can infer theirs.
+Their lessons are in
 [the growing course](docs/course/README.md).
 
 Read [docs/developer-experience.md](docs/developer-experience.md) for the full

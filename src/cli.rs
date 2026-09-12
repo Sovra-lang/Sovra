@@ -5,6 +5,8 @@ use std::fs;
 use std::process::ExitCode;
 
 use crate::compiler;
+use crate::compiler::check_report::{self, CheckKind};
+use crate::compiler::diagnostics::{Diagnostic, Diagnostics, Severity, Span};
 
 /// The version of the Sovra toolchain exposed by the CLI.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -84,20 +86,25 @@ fn command_status(command: &str, args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    if args.iter().any(|arg| arg == "--help" || arg == "-h")
-        && matches!(command, "run" | "build" | "check")
-    {
+    let help_requested = if command == "check" {
+        args.iter()
+            .take_while(|arg| arg.as_str() != "--")
+            .any(|arg| arg == "--help" || arg == "-h")
+    } else {
+        args.iter().any(|arg| arg == "--help" || arg == "-h")
+    };
+    if help_requested && matches!(command, "run" | "build" | "check") {
         if command == "build" {
             println!("Usage: svr build [--emit ir|js] <source.svr>");
         } else if command == "check" {
-            println!("Usage: svr check <source.svr|project-directory>");
+            println!("Usage: svr check [--format human|json] <source.svr|project-directory>");
         } else {
             println!("Usage: svr run <source.svr>");
         }
         return ExitCode::SUCCESS;
     }
 
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+    if help_requested {
         println!("{command} is planned for a future Sovra milestone.");
         return ExitCode::SUCCESS;
     }
@@ -190,21 +197,35 @@ fn command_status(command: &str, args: &[String]) -> ExitCode {
 }
 
 fn check_command(args: &[String]) -> ExitCode {
-    if args.len() != 1 {
-        eprintln!("svr: check expects exactly one source path or project directory");
-        return ExitCode::from(2);
-    }
-    let path = &args[0];
+    let (format, path) = match parse_check_args(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(2);
+        }
+    };
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) => {
-            eprintln!("svr: cannot inspect `{path}`: {error}");
+            print_check_io_error(
+                path,
+                None,
+                format,
+                format!("svr: cannot inspect `{path}`: {error}"),
+            );
             return ExitCode::from(1);
         }
     };
     if metadata.is_dir() {
         match compiler::project::check_project(path) {
             Ok(project) => {
+                if format == CheckFormat::Json {
+                    println!(
+                        "{}",
+                        check_report::render(path, Some(CheckKind::Project), &Diagnostics::new())
+                    );
+                    return ExitCode::SUCCESS;
+                }
                 println!(
                     "checked project `{}`: {} source file(s), {} service(s), {} model(s), {} route(s), {} page(s), {} scheduled task(s), {} auth policy(ies), auth {}, entry {}",
                     project.name,
@@ -221,16 +242,16 @@ fn check_command(args: &[String]) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(diagnostics) => {
-                print_diagnostics(diagnostics);
+                print_check_diagnostics(path, CheckKind::Project, format, diagnostics);
                 ExitCode::from(1)
             }
         }
     } else {
-        check_source_file(path)
+        check_source_file(path, format)
     }
 }
 
-fn check_source_file(path: &str) -> ExitCode {
+fn check_source_file(path: &str, format: CheckFormat) -> ExitCode {
     if !path.ends_with(".svr") {
         eprintln!("svr: source path `{path}` must have a .svr extension");
         return ExitCode::from(2);
@@ -238,23 +259,125 @@ fn check_source_file(path: &str) -> ExitCode {
     let source = match fs::read_to_string(path) {
         Ok(source) => source,
         Err(error) => {
-            eprintln!("svr: cannot read `{path}`: {error}");
+            print_check_io_error(
+                path,
+                Some(CheckKind::Source),
+                format,
+                format!("svr: cannot read `{path}`: {error}"),
+            );
             return ExitCode::from(1);
         }
     };
     let program = match compiler::parser::Parser::new().parse_source(&source) {
         Ok(program) => program,
         Err(diagnostics) => {
-            print_diagnostics(diagnostics);
+            print_check_diagnostics(path, CheckKind::Source, format, diagnostics);
             return ExitCode::from(1);
         }
     };
     if let Err(diagnostics) = compiler::semantic::SemanticAnalyzer::new().analyze(&program) {
-        print_diagnostics(diagnostics);
+        print_check_diagnostics(path, CheckKind::Source, format, diagnostics);
         return ExitCode::from(1);
     }
-    println!("checked source `{path}`");
+    if format == CheckFormat::Json {
+        println!(
+            "{}",
+            check_report::render(path, Some(CheckKind::Source), &Diagnostics::new())
+        );
+    } else {
+        println!("checked source `{path}`");
+    }
     ExitCode::SUCCESS
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckFormat {
+    Human,
+    Json,
+}
+
+fn parse_check_args(args: &[String]) -> Result<(CheckFormat, &str), String> {
+    let mut format = None;
+    let mut path = None;
+    let mut positional_only = false;
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
+        if !positional_only && argument == "--" {
+            positional_only = true;
+            continue;
+        }
+        let format_value = if !positional_only && argument == "--format" {
+            Some(
+                arguments
+                    .next()
+                    .ok_or("svr: --format expects `human` or `json`")?
+                    .as_str(),
+            )
+        } else if !positional_only {
+            argument.strip_prefix("--format=")
+        } else {
+            None
+        };
+        if let Some(value) = format_value {
+            if format.is_some() {
+                return Err("svr: --format may only be specified once".to_owned());
+            }
+            format = Some(match value {
+                "human" => CheckFormat::Human,
+                "json" => CheckFormat::Json,
+                _ => {
+                    return Err(format!(
+                        "svr: unsupported check format `{value}`; expected `human` or `json`"
+                    ))
+                }
+            });
+        } else {
+            if !positional_only && argument.starts_with('-') {
+                return Err(format!("svr: unknown check option `{argument}`"));
+            }
+            if path.replace(argument.as_str()).is_some() {
+                return Err(
+                    "svr: check expects exactly one source path or project directory".to_owned(),
+                );
+            }
+        }
+    }
+    let path = path.ok_or("svr: check expects exactly one source path or project directory")?;
+    Ok((format.unwrap_or(CheckFormat::Human), path))
+}
+
+fn print_check_diagnostics(
+    path: &str,
+    kind: CheckKind,
+    format: CheckFormat,
+    diagnostics: Diagnostics,
+) {
+    if format == CheckFormat::Json {
+        println!("{}", check_report::render(path, Some(kind), &diagnostics));
+    } else {
+        print_diagnostics(diagnostics);
+    }
+}
+
+fn print_check_io_error(path: &str, kind: Option<CheckKind>, format: CheckFormat, message: String) {
+    if format == CheckFormat::Human {
+        eprintln!("{message}");
+        return;
+    }
+    let diagnostics = Diagnostics {
+        items: vec![Diagnostic {
+            severity: Severity::Error,
+            code: "E0001",
+            message,
+            span: Span {
+                start: 0,
+                end: 0,
+                line: 0,
+                column: 0,
+            },
+        }],
+    };
+    println!("{}", check_report::render(path, kind, &diagnostics));
 }
 
 fn print_diagnostics(diagnostics: compiler::diagnostics::Diagnostics) {
@@ -312,6 +435,18 @@ fn parse_emit_value(value: &str) -> Result<Emit, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_treats_help_after_terminator_as_a_path() {
+        // Exercise dispatch as well as option parsing without a subprocess.
+        // Neither target exists in the repository working directory.
+        for path in ["--help", "-h"] {
+            assert_eq!(
+                run(["check", "--format=json", "--", path]),
+                ExitCode::from(1)
+            );
+        }
+    }
 
     #[test]
     fn version_is_reported() {

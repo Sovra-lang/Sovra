@@ -1,5 +1,58 @@
 # Development log
 
+## 2026-09-12 — Structured check reports
+
+- **Milestone:** Initial machine-readable diagnostic interface.
+- **Changed:** `svr check --format json` / `--format=json` report source and
+  project outcomes on stdout. Human output and 0/1/2 exit conventions remain;
+  help and usage errors stay human-readable. Input I/O errors use JSON E0001.
+- **Architecture:** Dedicated dependency-free `compiler/check_report.rs`
+  serializes a versioned envelope without changing compiler diagnostic structs.
+  Source locations retain byte/line/character offsets; unavailable and project
+  locations are null rather than assigned to a guessed file.
+- **Tests:** Four CLI JSON cases failed before implementation. Added Node
+  JSON.parse assertions for source success/errors, parameter locations, project
+  success/failure, I/O failures, format errors and serialization of all JSON
+  control characters and Unicode. Existing human CLI tests remain in place.
+- **Review fixes:** Reproduced and fixed help handling after the `--` option
+  terminator. Reproduced and fixed E1000 zero-length invalid-character spans;
+  ASCII and multibyte characters now have full byte ranges, including at byte 0.
+- **Validation:** Latest library run: 77 passed, including Node JSON parsing and
+  direct CLI dispatch for the option-terminator fix. Formatting, compile/test
+  compile checks, strict Clippy and `git diff --check` passed. Eight focused CLI
+  check tests passed after initial JSON integration. The final full-suite attempt
+  and one unchanged CLI retry skipped all 20 subprocess assertions because Windows
+  Application Control blocked `svr.exe`; no final CLI pass is claimed.
+- **Documentation:** Added `docs/reference/check-json.md` and
+  `docs/guides/automated-checks.md`; updated spec, status and agent context.
+- **Limitations:** Project checks remain partial wiring scans. Expression spans,
+  per-file project provenance and full symbol inspection remain incomplete.
+  Success reports do not yet carry project statistics or symbol graphs.
+- **Next:** Preserve expression and project-file provenance for better diagnostic
+  locations, then close remaining type-resolution gaps. Final subprocess
+  assertions need an environment that permits executing the built CLI.
+
+## 2026-09-12 — Required function parameter annotations (ADR 0002)
+
+- **Decision:** User approved Option A. Every function parameter now requires
+  an explicit type; inferred local `let` types and default Unit returns remain.
+- **Implementation:** Semantic E3014 reports each missing annotation at its
+  parameter name and suggests `name: Type`. All top-level/exported/private
+  functions are covered, even if unused. Parser/AST retain absent annotations
+  for diagnostics; Unknown is only recovery after the error in this path.
+- **Regression evidence:** Both missing-annotation tests failed before the fix.
+  Afterward `cargo test -- --nocapture` passed 71 library and 14 CLI tests,
+  with no failures or skipped assertions. Coverage includes mixed signatures,
+  exact spans, the original std::len type hole, local inference, a typed-call
+  mismatch, parser recovery and check/run/IR/JS-build rejection.
+- **Docs/example:** Accepted ADR, spec, status/handoff/agent context, changelog,
+  functions course lesson and executable `examples/functions/main.svr` updated.
+- **Compatibility:** Previously accepted untyped declarations now fail source
+  validation. Project-directory wiring scans do not enforce source semantics.
+  Named-type resolution and general inference remain separate unfinished work.
+- **Next:** Versioned JSON reports for source/project checking, with honest
+  null locations where the current checker does not retain source provenance.
+
 ## 2026-09-12 — Return completeness and token source ranges
 
 - **Milestone:** Foundational semantic and diagnostic hardening.

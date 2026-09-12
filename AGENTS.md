@@ -26,19 +26,21 @@ The assessment recommends existing-subset correctness hardening first. Module
 bodies, numeric widening/overflow, token ranges and straight-line returns now
 have regression coverage. ADR 0002 is approved and implemented: every function
 parameter requires an explicit annotation (`E3014`); local `let` inference and
-the default Unit return type remain. Named-type resolution is still incomplete. Consult
-`docs/FULL_DEVELOPMENT_STATUS.md` and `docs/adr/` for active work and decisions.
+the default Unit return type remain. Named-type resolution is still incomplete.
+Consult `docs/FULL_DEVELOPMENT_STATUS.md` and `docs/adr/` for active work and decisions.
 Do not renumber the established milestones.
 `run` executes one source file; `build` emits IR or JS; `check` accepts a source
-file or project. Other commands, including Sovra `test`, are reserved.
+file or project. `check --format json` emits versioned diagnostic reports; see
+`docs/reference/check-json.md` for null locations and the project-scan scope.
+Other commands, including Sovra `test`, are reserved.
 
 `tests/cli.rs` covers subprocess behavior; unit tests sit beside Rust modules.
 `examples/hello-world` is executable. `examples/fielddesk` is proposed application
 syntax with partial wiring validation. Passing its check does not make it runnable.
 `examples/modules` and `docs/course/modules.md` cover inline modules;
 `examples/functions` and `docs/course/functions.md` cover typed signatures and
-local inference. There is
-no separate runtime crate, package manager or language server yet.
+local inference. There is no separate runtime crate, package manager or language
+server yet.
 
 ## Commands and verification
 
@@ -51,6 +53,7 @@ cargo test -- --nocapture
 cargo clippy --all-targets --all-features -- -D warnings
 cargo run -- run examples/hello-world/main.svr
 cargo run -- check examples/fielddesk
+cargo run -- check --format json examples/functions/main.svr
 cargo run -- build --emit js examples/hello-world/main.svr
 ```
 

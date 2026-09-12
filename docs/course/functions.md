@@ -28,7 +28,7 @@ call remains a compatibility alias for `std::print`.
 These primitive types are available: `Unit`, `Bool`, `Int`, `Float`, `String`.
 Explicit annotations preserve numeric widening: an Int argument can be passed
 to a Float parameter. A value of another incompatible type is rejected; for
-example, `length(5)` produces `E3005` because `length` expects a String.
+example, `length(5)` produces `E3007` because `length` expects a String.
 
 ## Missing annotations
 

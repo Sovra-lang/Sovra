@@ -24,6 +24,125 @@ fn is_application_control_block(error: &io::Error) -> bool {
     error.raw_os_error() == Some(4551)
 }
 
+fn assert_json_report(output: &Output, assertions: &str) {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let script = format!(
+        "const assert = require('node:assert/strict'); const report = JSON.parse(require('node:fs').readFileSync(0, 'utf8')); assert.equal(report.schema_version, 1); {assertions}"
+    );
+    let mut child = Command::new("node")
+        .args(["-e", &script])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Node.js required for JSON contract tests");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(&output.stdout)
+        .expect("write JSON");
+    let result = child.wait_with_output().expect("Node.js result");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn check_json_reports_source_success() {
+    let source = format!("{}/examples/functions/main.svr", env!("CARGO_MANIFEST_DIR"));
+    let Some(output) = output_or_skip(svr().args(["check", "--format=json", &source])) else {
+        return;
+    };
+    assert_eq!(output.status.code(), Some(0));
+    assert_json_report(&output, "assert.equal(report.kind, 'source'); assert.equal(report.success, true); assert.deepEqual(report.diagnostics, []); assert.ok(report.target.endsWith('main.svr'));");
+}
+
+#[test]
+fn check_json_reports_parameter_diagnostic_location() {
+    let source = format!(
+        "{}/tests/fixtures/untyped-parameter.svr",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let Some(output) = output_or_skip(svr().args(["check", &source, "--format", "json"])) else {
+        return;
+    };
+    assert_eq!(output.status.code(), Some(1));
+    assert_json_report(&output, "assert.equal(report.kind, 'source'); assert.equal(report.success, false); const d = report.diagnostics.find(d => d.code === 'E3014'); assert.equal(d.severity, 'error'); assert.ok(d.message.includes('value: Type')); assert.equal(d.location.file, report.target); assert.equal(d.location.start, 10); assert.equal(d.location.end, 15); assert.equal(d.location.line, 0); assert.equal(d.location.column, 10);");
+}
+
+#[test]
+fn check_json_distinguishes_project_validation() {
+    let project = format!("{}/examples/fielddesk", env!("CARGO_MANIFEST_DIR"));
+    let Some(output) = output_or_skip(svr().args(["check", "--format", "json", &project])) else {
+        return;
+    };
+    assert_eq!(output.status.code(), Some(0));
+    assert_json_report(&output, "assert.equal(report.kind, 'project'); assert.equal(report.success, true); assert.deepEqual(report.diagnostics, []);");
+
+    let no_manifest = format!("{}/examples/hello-world", env!("CARGO_MANIFEST_DIR"));
+    let Some(output) = output_or_skip(svr().args(["check", "--format", "json", &no_manifest]))
+    else {
+        return;
+    };
+    assert_eq!(output.status.code(), Some(1));
+    assert_json_report(&output, "assert.equal(report.kind, 'project'); assert.equal(report.success, false); assert.equal(report.diagnostics[0].code, 'E4000'); assert.equal(report.diagnostics[0].location, null);");
+}
+
+#[test]
+fn check_json_reports_io_errors() {
+    let missing = format!(
+        "{}/tests/fixtures/no-such-source.svr",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let Some(output) = output_or_skip(svr().args(["check", "--format", "json", &missing])) else {
+        return;
+    };
+    assert_eq!(output.status.code(), Some(1));
+    assert_json_report(&output, "assert.equal(report.kind, null); assert.equal(report.success, false); assert.equal(report.diagnostics[0].code, 'E0001'); assert.equal(report.diagnostics[0].location, null);");
+}
+
+#[test]
+fn check_json_respects_option_terminator() {
+    for path in ["--help", "-h"] {
+        let Some(output) = output_or_skip(
+            svr()
+                .current_dir(format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR")))
+                .args(["check", "--format=json", "--", path]),
+        ) else {
+            return;
+        };
+        assert_eq!(output.status.code(), Some(1));
+        assert_json_report(&output, "assert.equal(report.success, false); assert.equal(report.kind, null); assert.equal(report.diagnostics[0].code, 'E0001');");
+    }
+}
+
+#[test]
+fn check_rejects_invalid_format_arguments() {
+    for arguments in [
+        vec!["check", "--format", "xml", "README.md"],
+        vec!["check", "--format"],
+        vec!["check", "--format", "json"],
+        vec!["check", "--format=json", "--format=human", "README.md"],
+        vec!["check", "--format=json", "README.md"],
+    ] {
+        let Some(output) = output_or_skip(svr().args(&arguments)) else {
+            return;
+        };
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        assert!(!output.stderr.is_empty(), "{arguments:?}");
+    }
+}
+
 #[test]
 fn version_command_prints_canonical_version() {
     let Some(output) = output_or_skip(svr().arg("--version")) else {
@@ -113,7 +232,7 @@ fn check_help_describes_current_usage() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "Usage: svr check <source.svr|project-directory>"
+        "Usage: svr check [--format human|json] <source.svr|project-directory>"
     );
 }
 

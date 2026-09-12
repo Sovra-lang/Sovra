@@ -33,6 +33,10 @@ and model/page expansion.
 
 ## Verification Flow
 
+Agents can request `svr check --format json <path>` for structured outcomes.
+See `reference/check-json.md`: project success remains a wiring check, and
+project diagnostic locations are null until per-file provenance is retained.
+
 Run these in order after each slice:
 
 ```text

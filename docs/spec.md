@@ -23,6 +23,9 @@ backend.
   metadata, runtime target, entry path, source-file discovery, external
   service binding consistency, app routes, page bindings, auth wiring, data
   model references, and scheduled task targets.
+* `check --format json <source.svr|project-directory>` emits a versioned JSON
+  report for validation/I/O outcomes. Human output remains the default. See
+  [the JSON report contract](reference/check-json.md) for schema and usage errors.
 * Other commands remain reserved and report that they are not implemented.
 * Unknown commands are rejected with a non-zero status and a help hint.
 

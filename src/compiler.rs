@@ -4,6 +4,7 @@
 
 pub mod ast;
 pub mod backend;
+pub mod check_report;
 pub mod diagnostics;
 pub mod interpreter;
 pub mod ir;

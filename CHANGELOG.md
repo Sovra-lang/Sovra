@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Add versioned JSON reports with `svr check --format json` for source/project
+  validation and input I/O errors, preserving default human output.
+
+- Require explicit type annotations on every function parameter, including
+  unused and module functions, under approved ADR 0002. Untyped declarations
+  now report semantic error `E3014` at the parameter name. This is a source
+  compatibility change; local `let` inference and default Unit returns remain.
+- Add an executable function example and a course lesson on typed signatures,
+  inferred locals and migration from untyped parameters.
+
 ## 0.1.0 - 2026-09-03
 
 - Added interpreter support for user-defined function calls, parameters, and

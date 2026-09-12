@@ -86,7 +86,10 @@ impl Lexer {
                     severity: Severity::Error,
                     code: "E1000",
                     message: format!("unexpected character `{character}`"),
-                    span,
+                    span: Span {
+                        end: scanner.offset,
+                        ..span
+                    },
                 });
                 continue;
             };
@@ -352,6 +355,46 @@ mod tests {
     fn reports_invalid_character() {
         let diagnostics = Lexer::new().tokenize("@").expect_err("source should fail");
         assert_eq!(diagnostics.items[0].code, "E1000");
+    }
+
+    #[test]
+    fn invalid_character_spans_cover_full_utf8_characters() {
+        for (source, expected_span) in [
+            (
+                "@",
+                Span {
+                    start: 0,
+                    end: 1,
+                    line: 0,
+                    column: 0,
+                },
+            ),
+            (
+                "😀",
+                Span {
+                    start: 0,
+                    end: 4,
+                    line: 0,
+                    column: 0,
+                },
+            ),
+            (
+                "\"é\"\n \"é\" 😀",
+                Span {
+                    start: 11,
+                    end: 15,
+                    line: 1,
+                    column: 5,
+                },
+            ),
+        ] {
+            let diagnostics = Lexer::new()
+                .tokenize(source)
+                .expect_err("invalid character should be diagnosed");
+            assert_eq!(diagnostics.items.len(), 1, "{source:?}");
+            assert_eq!(diagnostics.items[0].code, "E1000", "{source:?}");
+            assert_eq!(diagnostics.items[0].span, expected_span, "{source:?}");
+        }
     }
 
     #[test]
